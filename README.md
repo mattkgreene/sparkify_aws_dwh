@@ -39,18 +39,3 @@
 
 ### If ran from beginning the process takes about 2-3 hours to complete due to a large number of song files and complex time parsing process.
 
-
-
-
-
-
-
-## OPTIONAL: Question for the reviewer
- 
-If you have any question about the starter code or your own implementation, please add it in the cell below. 
-
-For example, if you want to know why a piece of code is written the way it is, or its function, or alternative ways of implementing the same functionality, or if you want to get feedback on a specific part of your code or get feedback on things you tried but did not work.
-
-Please keep your questions succinct and clear to help the reviewer answer them satisfactorily. 
-
-> How would you best recommend processing the time dimension from a integer timestamp column in events_log_stg?
