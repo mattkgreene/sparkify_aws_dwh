@@ -10,13 +10,12 @@ from boto.s3.connection import S3Connection
 from sql_queries import copy_table_queries, insert_dim_table_queries, insert_fact_table_queries
 import awscli
 import urllib
-from sql_queries import time_table_insert, time_table_create, time_table_drop
 
 
-run_stg_load = False
-run_time_dim_load = False
-run_dims_load = True
-run_fact_load = True
+run_stg_load = True # set to True when needing to run stage load, False if not
+run_time_dim_load = True # set to True when needing to run time dim load, False if not
+run_dims_load = True # set to True when needing to run non-time dim loads, False if not
+run_fact_load = True # set to True when needing to run fact load, False if not
 
 
 # CONFIG
@@ -28,19 +27,33 @@ SONG_DATA=config.get("S3","SONG_DATA")
 DWH_ROLE_ARN = config.get("IAM_ROLE","ARN")
 
 
-def load_staging_tables(cur, conn):
-    for query in copy_table_queries:
-        cur.execute(query)
-        conn.commit()
-
-
 def insert_dim_tables(cur, conn):
+    """
+    function to insert data from staging tables into:
+    users dim, artists_dim, and songs_dim using queries in sql_queries.py
+    Parameters:
+        - cur = connection cursor
+        - conn = aws postgres connection
+    Outputs:
+        None
+    """
+
     for query in insert_dim_table_queries:
         print("Starting query insert: {}".format(query))
         cur.execute(query)
         conn.commit()
 
 def insert_fact_table(cur, conn):
+    """
+    function to insert data from staging tables and dim's into fact table.
+    insert statement is in sql_queries.py
+    Parameters:
+        - cur = connection cursor
+        - conn = aws postgres connection
+    Outputs:
+        None
+    """
+
     for query in insert_fact_table_queries:
         print("Starting query insert: {}".format(query))
         cur.execute(query)
@@ -48,11 +61,26 @@ def insert_fact_table(cur, conn):
     
 
 def staging_events_copy_func(cur, conn, files, num_log_files):
+    """
+    function for implementing staging events insert 
+    
+    Parameters: 
+        - cur = connection cursor
+        - conn = aws postgres connection,
+        - files = list of events files
+        - num_log_files = number of log files
+    Outputs: 
+        None
+    """
+
     staging_events_copy = ""
     count = 0
     print('Starting Log Files Copy')
+    
+    # for file in files list passed in that were processed in process_data()
+    # iterate copy data from file into events_log_stg
     for file in files:
-        staging_events_copy = ("""copy events_log_stg 
+        staging_events_copy = ("""copy staging.events_log_stg 
                                 from 's3://udacity-dend/{}'
                                 iam_role '{}'
                                 region 'us-west-2'
@@ -66,12 +94,25 @@ def staging_events_copy_func(cur, conn, files, num_log_files):
 
 
 def staging_songs_copy_func(cur, conn, files, num_song_files):
+    """
+    function for implementing staging songs insert
+    Parameters: 
+        - cur = connection cursor
+        - conn = aws postgres connection
+        - files = list of events files
+        - num_song_files = number of song files
+    Outputs:
+        None
+    """
+    
     staging_songs_copy = ""
     count = 0
     print('Starting Song Files Copy')
+    # for file in files list passed in that were processed in process_data()
+    # iterate copy data from file into songs_log_stg
     for file in files: 
         staging_songs_copy = ("""
-                                copy songs_log_stg 
+                                copy staging.songs_log_stg 
                                 from 's3://udacity-dend/{}'
                                 iam_role '{}'
                                 region 'us-west-2'
@@ -83,18 +124,27 @@ def staging_songs_copy_func(cur, conn, files, num_song_files):
         print('executed query: {} of {}'.format(count, num_song_files))
         conn.commit()
 
-# def process_dims(cur, conn):
-    #     songs_select = """
-    #         SELECT song_id, artist_id, title, year, duration
-    #         FROM songs_log_stg
-    #     """
-    # songs_df = pd.read_sql_table()
-
 def process_data(cur, conn, log, song):
+    """
+    function to process file names stored in udacity-dend bucket
+    processes json files in bucket with prefixc song_ and log_
+    
+    Parameters: 
+        - cur = connection cursor, conn = aws postgres connection,
+        - log = boolean to determine whether to parse log files
+    song = boolean to determine whether to parse song files
+    
+    Outputs: 
+        - file names dictionary containing song and log files
+    
+    """
+    
+    # read config files to get key and secret to connect to s3 bucket
     helper = config.read_file(open('admin.cfg'))
     KEY = config.get('AWS','KEY')
     SECRET = config.get('AWS','SECRET')
-
+    
+    # s3 resource via boto3
     s3 = boto3.resource('s3',
                         region_name="us-west-2",
                          aws_access_key_id=KEY,
@@ -104,6 +154,7 @@ def process_data(cur, conn, log, song):
     
     song_files = []
     
+    # process song files
     if(song):
         count = 0
         print('Starting Song Files Read')
@@ -115,6 +166,7 @@ def process_data(cur, conn, log, song):
     
     log_files = []
     
+    # process log files
     if(log):
         count = 0
         print('Starting Log Files Read')
@@ -142,40 +194,6 @@ def process_data(cur, conn, log, song):
     
     return files
 
-def process_time_dim(cur, conn):
-    # drop time table if exists
-    cur.execute(time_table_drop)
-    
-    # create time table if it doesn't exists
-    cur.execute(time_table_create)
-    conn.commit()
-    
-    # start time table load and parse
-    df = pd.read_sql_query("SELECT ts FROM events_log_stg WHERE page='NextSong' ;", conn) #  
-    t = df
-    t['start_time'] = pd.to_datetime(t['ts'])
-    
-    date_dim = {}
-
-    # take each datetime category from the original timestamp value 
-    # and create a list out of all the different time-based categorical values
-    for i in t.index.tolist():
-        try: date_dim[i] = [t['ts'][i], t['start_time'][i].isoformat(), t['start_time'].dt.hour[i], t['start_time'].dt.day[i], t['start_time'].dt.week[i], 
-                t['start_time'].dt.month[i], t['start_time'].dt.year[i], t['start_time'].dt.weekday[i]]
-        except: print("Error at time extraction index: " + i)
-
-    time_data = date_dim
-    column_labels = ['time_key', 'start_time','hour','day','week', 'month', 'year','weekday']
-
-    # initialize a time dataframe from the extracted data-based values 
-    # so that we can iter over the rows in the dataframe when inserting into the time table
-    time_df = pd.DataFrame.from_dict(date_dim, orient='index', columns=column_labels)
-    
-    # iterate over rows and insert date-based data into the time table
-    for i, row in time_df.iterrows():
-        cur.execute(time_table_insert, list(row))
-    conn.commit()
-
 def main():
     config = configparser.ConfigParser()
     config.read('dwh.cfg')
@@ -183,20 +201,20 @@ def main():
     conn = psycopg2.connect("host={} dbname={} user={} password={} port={}".format(*config['CLUSTER'].values()))
     cur = conn.cursor()
     
-    # load_staging_tables(cur, conn)
-    # insert_tables(cur, conn)
+    # if run_stg_load is true then process log and song data in udacity-dend s3 bucket
+    # then copy files from udacity-dend s3 bucket into songs_log_stg and events_log_stg
     if(run_stg_load):
-        files = process_data(cur, conn, False, False)
+        files = process_data(cur, conn, True, True)
         staging_events_copy_func(cur, conn, files['log_files'], files['num_log_files'])
         staging_songs_copy_func(cur, conn, files['song_files'], files['num_song_files'])
-    elif(run_time_dim_load):
-        print("Starting time dimension Insert")
-        process_time_dim(cur, conn)
     
+    # if run_dims_load is true then run insert statements for:
+    # songs dim, artists dim, and users dim
     if(run_dims_load):
         print("Starting dimension Inserts")
         insert_dim_tables(cur, conn)
     
+    # if run_fact_load is true then run insert statement for songplays fact table
     if(run_fact_load):
         print("Starting fact Inserts")
         insert_fact_table(cur, conn)
